@@ -59,13 +59,27 @@ export default function ConfigForm({
     }
   }, [discordChannelIdInput, discordChannelId]);
 
+  // Update currentMemory whenever initialConversationSummary prop changes (from parent)
+  useEffect(() => {
+    setCurrentMemory(initialConversationSummary);
+  }, [initialConversationSummary]); // This useEffect listens for prop changes
+
   const handleResetMemory = async () => {
+    if (!discordChannelIdInput) return; // Don't do anything if there's no channel ID
+
     setIsResetting(true);
+    setCurrentMemory(''); // Optimistically clear the memory in the UI
+
     try {
-      if (discordChannelIdInput) {
-        await resetConversationMemory(discordChannelIdInput);
-      }
+      // The server action will still run to delete from the DB and revalidate
+      await resetConversationMemory(discordChannelIdInput);
+      // The page will be redirected by the server action on success.
+    } catch (error) {
+      // If the server action fails, we should ideally show an error message.
+      // For now, we'll just log it. The page redirect on error will handle messaging.
+      console.error('Failed to reset memory on the server:', error);
     } finally {
+      // This might not even be reached if the redirect happens, but it's good practice.
       setIsResetting(false);
     }
   };

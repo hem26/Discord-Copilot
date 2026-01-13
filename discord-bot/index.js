@@ -8,11 +8,10 @@ const axios = require('axios');
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_API_URL = process.env.GEMINI_API_URL;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const LLM_TIMEOUT = 15000; // 15 seconds
 
-if (!DISCORD_TOKEN || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !GEMINI_API_KEY || !GEMINI_API_URL) {
+if (!DISCORD_TOKEN || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !GROQ_API_KEY) {
     console.error('FATAL: Missing environment variables. Please check your .env file.');
     process.exit(1);
 }
@@ -94,18 +93,43 @@ async function getConversationSummary(channelId) {
 
 async function updateConversationSummary(channelId, summary) {
     try {
-        const { error } = await supabase
+        // Step 1: Check if a record already exists for this channelId
+        const { data: existing, error: selectError } = await supabase
             .from(CONVERSATION_MEMORY_TABLE)
-            .upsert(
-                { discord_channel_id: channelId, summary: summary, updated_at: new Date().toISOString() },
-                { onConflict: ['discord_channel_id'] }
-            );
+            .select('discord_channel_id')
+            .eq('discord_channel_id', channelId)
+            .limit(1);
 
-        if (error) {
-            console.error('Error updating conversation summary:', error.message);
-        } else {
-            console.log(`Summary updated for channel ${channelId}`);
+        if (selectError) {
+            console.error('Error checking for existing summary:', selectError.message);
+            return;
         }
+
+        let queryError;
+
+        if (existing && existing.length > 0) {
+            // Step 2a: Record exists, so UPDATE it
+            console.log(`Found existing summary for channel ${channelId}. Updating...`);
+            const { error } = await supabase
+                .from(CONVERSATION_MEMORY_TABLE)
+                .update({ summary: summary, updated_at: new Date().toISOString() })
+                .eq('discord_channel_id', channelId);
+            queryError = error;
+        } else {
+            // Step 2b: Record does not exist, so INSERT it
+            console.log(`No summary found for channel ${channelId}. Inserting...`);
+            const { error } = await supabase
+                .from(CONVERSATION_MEMORY_TABLE)
+                .insert({ discord_channel_id: channelId, summary: summary, updated_at: new Date().toISOString() });
+            queryError = error;
+        }
+
+        if (queryError) {
+            console.error('Error saving conversation summary:', queryError.message);
+        } else {
+            console.log(`Summary saved successfully for channel ${channelId}`);
+        }
+
     } catch (e) {
         console.error('An unexpected error occurred in updateConversationSummary:', e.message);
     }
@@ -115,18 +139,28 @@ async function updateConversationSummary(channelId, summary) {
 
 async function callLlmApi(prompt) {
     try {
-        const response = await axios.post(GEMINI_API_URL, {
-            contents: [{ parts: [{ text: prompt }] }]
-        }, {
-            headers: {
-                'Content-Type': 'application/json',
-                'x-goog-api-key': GEMINI_API_KEY
+        const response = await axios.post(
+            'https://api.groq.com/openai/v1/chat/completions',
+            {
+                model: 'llama-3.1-8b-instant', // Recommended replacement for 'llama3-8b-8192'
+                messages: [
+                    {
+                        role: 'user',
+                        content: prompt,
+                    },
+                ],
             },
-            timeout: LLM_TIMEOUT
-        });
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${GROQ_API_KEY}`,
+                },
+                timeout: LLM_TIMEOUT,
+            }
+        );
 
-        if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-            return response.data.candidates[0].content.parts[0].text;
+        if (response.data?.choices?.[0]?.message?.content) {
+            return response.data.choices[0].message.content;
         } else {
             console.error('Invalid LLM API response structure:', response.data);
             return 'Sorry, I received an unexpected response from the AI.';

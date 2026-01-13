@@ -5,6 +5,8 @@ import { createServerClient } from '@supabase/ssr';
 import { logout } from '@/app/auth/actions'; // Import the logout server action
 import ConfigForm from './config-form';
 
+export const revalidate = 0; // Force dynamic rendering and no caching
+
 // Helper function to create a Supabase client for Server Components
 function getSupabaseClient() {
   const cookieStore = cookies();
